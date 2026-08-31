@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STEP Viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #1f1e1c;
+        --panel-bg: #2a2926;
+        --panel-bg-alt: #232220;
+        --border: #3d3b36;
+        --text: #f2efe9;
+        --text-dim: #a8a39a;
+        --accent: #d97757;
+        --accent-hover: #c2694b;
+        --accent-soft: rgba(217, 119, 87, 0.18);
+        --radius-lg: 14px;
+        --radius-md: 10px;
+        --radius-sm: 7px;
+        --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+        --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+        --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        overflow: hidden;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #app {
+        position: relative;
+        width: 100%;
+        height: 100%;
+      }
+
+      #viewer-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+
+      #drop-hint {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+        font-size: 14px;
+        color: var(--text-dim);
+        z-index: 5;
+      }
+      #drop-hint span {
+        border: 1px dashed var(--border);
+        border-radius: var(--radius-md);
+        padding: 10px 18px;
+        background: rgba(42, 41, 38, 0.6);
+      }
+
+      #panel-stack {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        width: 196px;
+        max-height: calc(100vh - 24px);
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        z-index: 10;
+      }
+
+      .panel {
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow);
+        padding: 9px 11px;
+      }
+
+      .panel h2 {
+        margin: 0 0 6px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+      }
+      .panel h2.section {
+        margin-top: 10px;
+      }
+
+      details.panel {
+        padding: 9px 12px;
+      }
+      details.panel summary {
+        cursor: pointer;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--text-dim);
+        list-style: none;
+      }
+      details.panel summary::-webkit-details-marker {
+        display: none;
+      }
+      details.panel summary::before {
+        content: "▸";
+        display: inline-block;
+        margin-right: 5px;
+        color: var(--accent);
+        transition: transform 0.15s ease;
+      }
+      details.panel[open] summary::before {
+        transform: rotate(90deg);
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+      }
+      .row:last-child {
+        margin-bottom: 0;
+      }
+      .row label {
+        flex: 1;
+        font-size: 11.5px;
+        color: var(--text-dim);
+      }
+      .actions {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+
+      .field-grid {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 5px 8px;
+        align-items: center;
+        margin: 8px 0;
+      }
+      .field-grid label {
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+
+      button {
+        font-family: var(--sans);
+        font-size: 11.5px;
+        font-weight: 500;
+        padding: 6px 10px;
+        border-radius: var(--radius-sm);
+        border: 1px solid transparent;
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+        flex: 1;
+      }
+      button.primary:hover {
+        background: var(--accent-hover);
+      }
+      button.secondary {
+        background: transparent;
+        border-color: var(--border);
+        color: var(--text);
+      }
+      button.secondary:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      button:active {
+        transform: scale(0.96);
+      }
+      button.icon-button {
+        flex: 0 0 auto;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      button.icon-button svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      input[type="number"] {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        width: 64px;
+        text-align: right;
+        background: var(--panel-bg-alt);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        padding: 4px 6px;
+      }
+      input[type="number"]:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      input[type="file"] {
+        width: 100%;
+        font-family: var(--sans);
+        font-size: 11px;
+        color: var(--text-dim);
+      }
+      input[type="file"]::file-selector-button {
+        font-family: var(--sans);
+        font-size: 11px;
+        padding: 5px 10px;
+        margin-right: 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background: var(--panel-bg-alt);
+        color: var(--text);
+        cursor: pointer;
+        transition: all 0.15s ease;
+      }
+      input[type="file"]::file-selector-button:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      #status {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 10;
+        background: var(--panel-bg);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 9px 18px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        box-shadow: var(--shadow);
+        max-width: calc(100vw - 32px);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="viewer-canvas"></canvas>
+      <div id="drop-hint"><span>Drop a STEP file (.step / .stp)</span></div>
+
+      <div id="panel-stack">
+        <section class="panel">
+          <h2>Model</h2>
+          <div class="row">
+            <input id="file-input" type="file" accept=".step,.stp" />
+          </div>
+          <div class="row">
+            <label for="model-opacity">Opacity</label>
+            <input id="model-opacity" type="number" step="0.05" min="0" max="1" value="0.15" />
+          </div>
+
+          <h2 class="section">Playback</h2>
+          <div class="row" style="gap: 6px">
+            <button id="play-button" class="primary icon-button" type="button" title="Play" aria-label="Play">
+              <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5-9-5.5z" /></svg>
+            </button>
+            <button id="pause-button" class="secondary icon-button" type="button" title="Pause" aria-label="Pause">
+              <svg viewBox="0 0 16 16" fill="currentColor">
+                <rect x="3.5" y="2.5" width="3" height="11" />
+                <rect x="9.5" y="2.5" width="3" height="11" />
+              </svg>
+            </button>
+            <button id="stop-button" class="secondary icon-button" type="button" title="Stop" aria-label="Stop">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="3" width="10" height="10" /></svg>
+            </button>
+          </div>
+          <div class="row">
+            <label for="time-scale">Speed</label>
+            <input id="time-scale" type="number" step="0.05" min="0.01" value="1" />
+          </div>
+        </section>
+
+        <details class="panel" id="water-source-panel">
+          <summary>Fluid State</summary>
+          <div class="field-grid">
+            <label for="source-center-x">Center X (mm)</label>
+            <input id="source-center-x" type="number" step="any" value="0" />
+            <label for="source-center-y">Center Y (mm)</label>
+            <input id="source-center-y" type="number" step="any" value="0" />
+            <label for="source-center-z">Center Z (mm)</label>
+            <input id="source-center-z" type="number" step="any" value="0" />
+            <label for="source-size-x">Size X (mm)</label>
+            <input id="source-size-x" type="number" step="10" min="1" value="200" />
+            <label for="source-size-y">Size Y (mm)</label>
+            <input id="source-size-y" type="number" step="10" min="1" value="200" />
+            <label for="source-size-z">Size Z (mm)</label>
+            <input id="source-size-z" type="number" step="10" min="1" value="200" />
+            <label for="source-spacing">Spacing (mm)</label>
+            <input id="source-spacing" type="number" step="1" min="0.1" value="20" />
+            <label for="source-dir-x">Dir X</label>
+            <input id="source-dir-x" type="number" step="any" value="0" />
+            <label for="source-dir-y">Dir Y</label>
+            <input id="source-dir-y" type="number" step="any" value="-1" />
+            <label for="source-dir-z">Dir Z</label>
+            <input id="source-dir-z" type="number" step="any" value="0" />
+            <label for="source-speed">Speed (m/s)</label>
+            <input id="source-speed" type="number" step="0.1" min="0" value="0" />
+          </div>
+          <div class="actions">
+            <button id="apply-source-button" class="primary">Apply</button>
+            <button id="clear-source-button" class="secondary">Clear</button>
+          </div>
+        </details>
+      </div>
+
+      <div id="status">Idle</div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
