@@ -10,6 +10,7 @@ interface ModelPart {
 
 const EDGE_ANGLE_THRESHOLD_DEGREES = 20;
 const DEFAULT_OPACITY = 0.15;
+const MODEL_COLOR = 0x8899aa;
 
 /**
  * Wraps a Three.js WebGPURenderer scene. Falls back to WebGL2 automatically
@@ -30,6 +31,7 @@ export class Viewer {
   private opacity = DEFAULT_OPACITY;
   private readonly axisGizmoScene: THREE.Scene;
   private readonly axisGizmoCamera: THREE.OrthographicCamera;
+  private readonly sourcePreviewBox: THREE.LineSegments;
 
   private constructor(canvas: HTMLCanvasElement, renderer: THREE.WebGPURenderer) {
     this.canvas = canvas;
@@ -61,6 +63,14 @@ export class Viewer {
     this.axisGizmoScene = new THREE.Scene();
     this.axisGizmoCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
     buildAxisGizmo(this.axisGizmoScene);
+
+    // Unit box, scaled/positioned per update — shows where a water release
+    // block sits before it's actually run, so it doesn't have to be
+    // recreated (just retransformed) on every form edit.
+    const previewEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+    this.sourcePreviewBox = new THREE.LineSegments(previewEdges, new THREE.LineBasicMaterial({ color: 0x39ff14 }));
+    this.sourcePreviewBox.visible = false;
+    this.scene.add(this.sourcePreviewBox);
 
     window.addEventListener("resize", () => this.handleResize());
     this.handleResize();
@@ -104,6 +114,17 @@ export class Viewer {
     this.updateGridHelper(box, center, radius);
   }
 
+  /** Shows a wireframe box at the given center/size (m) — the water release region before it's run. */
+  setSourcePreview(center: [number, number, number], size: [number, number, number]): void {
+    this.sourcePreviewBox.position.set(center[0], center[1], center[2]);
+    this.sourcePreviewBox.scale.set(Math.max(size[0], 1e-6), Math.max(size[1], 1e-6), Math.max(size[2], 1e-6));
+    this.sourcePreviewBox.visible = true;
+  }
+
+  hideSourcePreview(): void {
+    this.sourcePreviewBox.visible = false;
+  }
+
   /** Replaces the currently displayed model and reframes the camera on it. */
   setMeshes(meshes: LoadedMesh[]): void {
     for (const part of this.modelParts) {
@@ -127,12 +148,11 @@ export class Viewer {
       }
       geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1));
 
-      const color = mesh.color
-        ? new THREE.Color(mesh.color[0], mesh.color[1], mesh.color[2])
-        : new THREE.Color(0x8899aa);
-
+      // Always a neutral gray, ignoring any per-face color the STEP file
+      // may carry — colored CAD faces would fight with the translucent
+      // display style and the edge overlay for visual attention.
       const material = new THREE.MeshStandardMaterial({
-        color,
+        color: MODEL_COLOR,
         metalness: 0.1,
         roughness: 0.6,
         side: THREE.DoubleSide,

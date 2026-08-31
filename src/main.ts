@@ -13,8 +13,7 @@ import { errorMessage, requireElement } from "./dom";
 const canvas = requireElement<HTMLCanvasElement>("#viewer-canvas");
 const fileInput = requireElement<HTMLInputElement>("#file-input");
 const modelOpacityInput = requireElement<HTMLInputElement>("#model-opacity");
-const playButton = requireElement<HTMLButtonElement>("#play-button");
-const pauseButton = requireElement<HTMLButtonElement>("#pause-button");
+const playPauseButton = requireElement<HTMLButtonElement>("#play-pause-button");
 const stopButton = requireElement<HTMLButtonElement>("#stop-button");
 const timeScaleInput = requireElement<HTMLInputElement>("#time-scale");
 const applySourceButton = requireElement<HTMLButtonElement>("#apply-source-button");
@@ -65,7 +64,7 @@ async function main(): Promise<void> {
   // renderer, which would kill the animation loop entirely.
   particleGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
   const particleMaterial = new THREE.PointsMaterial({
-    color: 0x4fb0ff,
+    color: 0x39ff14,
     size: 0.014,
     sizeAttenuation: true,
   });
@@ -103,6 +102,32 @@ async function main(): Promise<void> {
   // tweak from rather than arbitrary placeholders.
   let customWaterSource: WaterBlockSource | null = null;
   populateSourceForm(computeDefaultWaterSource());
+
+  /** Shows a wireframe box for whatever center/size the form currently has, live as it's edited — before Apply, before Play. */
+  function updateSourcePreviewFromForm(): void {
+    const center: [number, number, number] = [
+      (Number(sourceCenterXInput.value) || 0) * MM_TO_METERS,
+      (Number(sourceCenterYInput.value) || 0) * MM_TO_METERS,
+      (Number(sourceCenterZInput.value) || 0) * MM_TO_METERS,
+    ];
+    const size: [number, number, number] = [
+      (Number(sourceSizeXInput.value) || 0) * MM_TO_METERS,
+      (Number(sourceSizeYInput.value) || 0) * MM_TO_METERS,
+      (Number(sourceSizeZInput.value) || 0) * MM_TO_METERS,
+    ];
+    viewer.setSourcePreview(center, size);
+  }
+  updateSourcePreviewFromForm();
+  for (const input of [
+    sourceCenterXInput,
+    sourceCenterYInput,
+    sourceCenterZInput,
+    sourceSizeXInput,
+    sourceSizeYInput,
+    sourceSizeZInput,
+  ]) {
+    input.addEventListener("input", updateSourcePreviewFromForm);
+  }
 
   function startSimulation(reframeCamera: boolean): void {
     const scenario = createDamBreakScenario({
@@ -184,6 +209,7 @@ async function main(): Promise<void> {
       // Refresh the form to the new default (obstacle-relative) placement,
       // so it stays a sensible starting point for this model's scale/position.
       populateSourceForm(computeDefaultWaterSource(obstacleBounds));
+      updateSourcePreviewFromForm();
 
       const triangleCount = meshes.reduce((sum, m) => sum + m.indices.length / 3, 0);
       setStatus(`${file.name} (${meshes.length} mesh${meshes.length === 1 ? "" : "es"} / ${triangleCount.toLocaleString()} triangles)`);
@@ -218,26 +244,38 @@ async function main(): Promise<void> {
     if (file) void handleFile(file);
   });
 
-  playButton.addEventListener("click", () => {
-    isPlaying = true;
-    if (simulation === null) {
-      // Stopped -> fresh start.
-      void ensureCollisionFieldAndStart(false);
-    }
-    // Paused -> just resume in place; the frozen positions are untouched.
-  });
+  function updatePlayPauseButton(): void {
+    playPauseButton.classList.toggle("is-playing", isPlaying);
+    playPauseButton.title = isPlaying ? "Pause" : "Play";
+    playPauseButton.setAttribute("aria-label", isPlaying ? "Pause" : "Play");
+  }
 
-  pauseButton.addEventListener("click", () => {
-    isPlaying = false;
-    if (simulation) {
-      setStatus("Paused");
+  playPauseButton.addEventListener("click", () => {
+    if (isPlaying) {
+      // Playing -> pause: freeze in place, no change to the water itself.
+      isPlaying = false;
+      updateSourcePreviewFromForm();
+      if (simulation) {
+        setStatus("Paused");
+      }
+    } else {
+      isPlaying = true;
+      viewer.hideSourcePreview();
+      if (simulation === null) {
+        // Stopped -> fresh start.
+        void ensureCollisionFieldAndStart(false);
+      }
+      // Paused -> just resume in place; the frozen positions are untouched.
     }
+    updatePlayPauseButton();
   });
 
   stopButton.addEventListener("click", () => {
     isPlaying = false;
     points.visible = false;
     simulation = null;
+    updateSourcePreviewFromForm();
+    updatePlayPauseButton();
     setStatus("Stopped");
   });
 
@@ -287,6 +325,7 @@ async function main(): Promise<void> {
   clearSourceButton.addEventListener("click", () => {
     customWaterSource = null;
     populateSourceForm(computeDefaultWaterSource(obstacleBounds));
+    updateSourcePreviewFromForm();
     setStatus("Fluid state cleared (back to the default placement)");
 
     if (simulation !== null) {

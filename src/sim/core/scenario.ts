@@ -66,8 +66,13 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     ];
     const maxDim = Math.max(size[0], size[1], size[2], 1e-6);
     const pad = maxDim * 0.6;
+    // The floor sits just under the model, not under whichever axis happens
+    // to be largest: a wide/flat model (e.g. 500x20x300mm) has maxDim from
+    // its width, and padding *below* by 60% of that would put the floor 15x
+    // the model's own height beneath it. Based on the model's own Y extent instead.
+    const padBelow = Math.max(size[1] * 0.1, 1e-6);
 
-    domainMin = [obstacle.min[0] - pad, obstacle.min[1] - pad, obstacle.min[2] - pad];
+    domainMin = [obstacle.min[0] - pad, obstacle.min[1] - padBelow, obstacle.min[2] - pad];
     // Extra headroom above (+Y) so the water block starts clear of the obstacle and falls onto it.
     domainMax = [obstacle.max[0] + pad, obstacle.max[1] + pad * 2.2, obstacle.max[2] + pad];
 

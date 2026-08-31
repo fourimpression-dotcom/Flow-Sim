@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>STEP Viewer</title>
+    <title>Flow Sim</title>
     <style>
       :root {
         color-scheme: dark;
@@ -205,6 +205,15 @@
         width: 14px;
         height: 14px;
       }
+      #play-pause-button .icon-pause {
+        display: none;
+      }
+      #play-pause-button.is-playing .icon-play {
+        display: none;
+      }
+      #play-pause-button.is-playing .icon-pause {
+        display: inline;
+      }
 
       input[type="number"] {
         font-family: var(--mono);
@@ -284,11 +293,9 @@
 
           <h2 class="section">Playback</h2>
           <div class="row" style="gap: 6px">
-            <button id="play-button" class="primary icon-button" type="button" title="Play" aria-label="Play">
-              <svg viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5-9-5.5z" /></svg>
-            </button>
-            <button id="pause-button" class="secondary icon-button" type="button" title="Pause" aria-label="Pause">
-              <svg viewBox="0 0 16 16" fill="currentColor">
+            <button id="play-pause-button" class="primary icon-button" type="button" title="Play" aria-label="Play">
+              <svg class="icon-play" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5-9-5.5z" /></svg>
+              <svg class="icon-pause" viewBox="0 0 16 16" fill="currentColor">
                 <rect x="3.5" y="2.5" width="3" height="11" />
                 <rect x="9.5" y="2.5" width="3" height="11" />
               </svg>
