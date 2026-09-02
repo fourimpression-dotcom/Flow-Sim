@@ -20,6 +20,7 @@ const stopButton = requireElement<HTMLButtonElement>("#stop-button");
 const timeScaleInput = requireElement<HTMLInputElement>("#time-scale");
 const particleSizeInput = requireElement<HTMLInputElement>("#particle-size");
 const floorDrainCheckbox = requireElement<HTMLInputElement>("#floor-drain");
+const surfaceTensionCheckbox = requireElement<HTMLInputElement>("#surface-tension");
 const resetSourceButton = requireElement<HTMLButtonElement>("#reset-source-button");
 const sourceCenterXInput = requireElement<HTMLInputElement>("#source-center-x");
 const sourceCenterYInput = requireElement<HTMLInputElement>("#source-center-y");
@@ -173,6 +174,7 @@ async function main(): Promise<void> {
     );
     simulation.setCollisionField(collisionField);
     simulation.setDeleteParticlesAtFloor(floorDrainCheckbox.checked);
+    simulation.setSurfaceTensionEnabled(surfaceTensionCheckbox.checked);
 
     baseParticleSize = scenario.params.smoothingRadius * 0.4;
     applyParticleSize();
@@ -323,6 +325,10 @@ async function main(): Promise<void> {
 
   floorDrainCheckbox.addEventListener("change", () => {
     simulation?.setDeleteParticlesAtFloor(floorDrainCheckbox.checked);
+  });
+
+  surfaceTensionCheckbox.addEventListener("change", () => {
+    simulation?.setSurfaceTensionEnabled(surfaceTensionCheckbox.checked);
   });
 
   app.addEventListener("dragover", (event) => {

@@ -50,6 +50,34 @@ export function viscosityLaplacian(r: number, h: number, coefficient: number): n
 }
 
 /**
+ * Akinci, Akinci & Teschner 2013 ("Versatile Surface Tension and Adhesion
+ * for SPH Fluids") cohesion kernel, used for the pairwise surface-tension
+ * force. Negative for r < h/2 (short range) and positive for h/2 < r < h
+ * (longer range), continuous through the switch at r = h/2 and reaching
+ * exactly 0 at r = h. Combined with the force formula's sign (see
+ * CpuSphBackend.computeForces), this makes cohesion self-stabilizing:
+ * particles that get too close are pushed apart (the negative branch),
+ * while particles drifting apart within the kernel support are pulled back
+ * together (the positive branch) — unlike reusing a density kernel such as
+ * poly6 (which is purely positive and peaks at r=0), there's no risk of
+ * attraction blowing up as particles approach each other.
+ */
+export function cohesionKernelCoefficient(h: number): number {
+  return 32 / (Math.PI * Math.pow(h, 9));
+}
+
+export function cohesionKernel(r: number, h: number, coefficient: number): number {
+  if (r <= 0 || r > h) return 0;
+  const hr = h - r;
+  const term = hr * hr * hr * r * r * r;
+  if (2 * r > h) {
+    return coefficient * term;
+  }
+  const h6 = Math.pow(h, 6);
+  return coefficient * (2 * term - h6 / 64);
+}
+
+/**
  * Tait equation of state: relates density back to pressure for weakly-
  * compressible SPH. Negative pressure is clamped to 0 — the standard
  * free-surface-flow trick that avoids unphysical inter-particle attraction

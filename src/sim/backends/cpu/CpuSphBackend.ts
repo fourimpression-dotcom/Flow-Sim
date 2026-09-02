@@ -1,5 +1,7 @@
 import type { CollisionField, SphComputeBackend, SphDiagnostics, SphParams, Vec3Tuple } from "../../core/types";
 import {
+  cohesionKernel,
+  cohesionKernelCoefficient,
   poly6,
   poly6Coefficient,
   spikyGradientCoefficient,
@@ -146,6 +148,8 @@ export class CpuSphBackend implements SphComputeBackend {
     const hSq = h * h;
     const spikyCoeff = spikyGradientCoefficient(h);
     const viscCoeff = viscosityLaplacianCoefficient(h);
+    const cohesionCoeff = cohesionKernelCoefficient(h);
+    const massSq = params.particleMass * params.particleMass;
     const scratch = this.neighborScratch;
 
     for (let i = 0; i < this.count; i++) {
@@ -153,6 +157,7 @@ export class CpuSphBackend implements SphComputeBackend {
       const py = this.positions[i * 3 + 1]!;
       const pz = this.positions[i * 3 + 2]!;
       const pi = this.pressures[i]!;
+      const densityI = this.densities[i]!;
       const vix = this.velocities[i * 3]!;
       const viy = this.velocities[i * 3 + 1]!;
       const viz = this.velocities[i * 3 + 2]!;
@@ -189,6 +194,22 @@ export class CpuSphBackend implements SphComputeBackend {
         fx += viscFactor * (this.velocities[j * 3]! - vix);
         fy += viscFactor * (this.velocities[j * 3 + 1]! - viy);
         fz += viscFactor * (this.velocities[j * 3 + 2]! - viz);
+
+        // Surface tension cohesion (Akinci et al. 2013): pairwise force
+        // along (xi-xj), density-normalized (2 rho0 / (rho_i+rho_j)) so it
+        // doesn't over-attract in the lower-density free-surface region.
+        // cohesionKernel is negative at short range and positive at longer
+        // range within its support (see its own doc comment) — applying it
+        // regardless of sign (not just when positive) is what makes this
+        // self-stabilizing rather than only ever attractive.
+        if (params.surfaceTensionCoefficient > 0) {
+          const cohesion = cohesionKernel(r, h, cohesionCoeff);
+          const densityNorm = (2 * params.restDensity) / (densityI + densityJ);
+          const cohesionFactor = (-params.surfaceTensionCoefficient * massSq * cohesion * densityNorm) / r;
+          fx += cohesionFactor * dx;
+          fy += cohesionFactor * dy;
+          fz += cohesionFactor * dz;
+        }
       }
 
       this.forces[i * 3] = fx;

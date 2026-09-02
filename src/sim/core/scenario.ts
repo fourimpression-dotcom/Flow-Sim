@@ -26,6 +26,22 @@ export interface CreateDamBreakScenarioOptions {
 
 const MAX_PARTICLES = 20000;
 
+// Surface-tension cohesion (see core/kernels.ts's cohesionKernel) scales
+// extremely steeply with particle spacing: working through the force
+// formula in CpuSphBackend.computeForces, the resulting acceleration is
+// proportional to surfaceTensionCoefficient * spacing^3 for a fixed
+// coefficient. A single fixed coefficient that looked fine at one spacing
+// was unstable at a coarser one and imperceptible at a finer one when
+// tested — so the coefficient itself is derived per scenario as
+// SURFACE_TENSION_BASE / spacing^3, keeping the actual physical effect
+// roughly constant across the full range of particle spacings this app
+// produces. SURFACE_TENSION_BASE itself was calibrated empirically (swept
+// over several orders of magnitude against this file's own dam-break
+// scenario, checking density/pressure/energy stability and no mesh
+// penetration) to a value with a wide safety margin below where
+// instability actually starts.
+const SURFACE_TENSION_BASE = 0.93;
+
 /**
  * SPH release scenario: a block of water given an initial position, size,
  * and velocity, that falls/flies from t=0 under gravity (and, once
@@ -95,6 +111,7 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
 
   spacing = clampSpacingForParticleBudget(blockMin, blockMax, spacing);
   const smoothingRadius = spacing * 1.3; // h; ~1.2-1.5x spacing gives ~30-40 neighbors in 3D
+  const surfaceTensionCoefficient = SURFACE_TENSION_BASE / (spacing * spacing * spacing);
 
   const positions: number[] = [];
   for (let x = blockMin[0]; x <= blockMax[0]; x += spacing) {
@@ -142,6 +159,7 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     // over-damping the flow (Monaghan's original paper allows up to ~0.5;
     // real-time SPH tends to use less).
     xsphEpsilon: 0.1,
+    surfaceTensionCoefficient,
     gravity: [0, -9.81, 0],
     timeStep,
     boundaryDamping: 0.5,

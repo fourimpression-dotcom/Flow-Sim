@@ -38,6 +38,16 @@ export interface SphParams {
   /** Dynamic viscosity coefficient mu. */
   viscosity: number;
   /**
+   * Surface-tension cohesion coefficient (Akinci et al. 2013), >= 0. Scales
+   * a purely attractive pairwise force between neighboring particles (see
+   * core/kernels.ts's cohesionKernel) that pulls loosely-connected water
+   * back together — e.g. keeping thin streams/droplets from breaking apart
+   * as readily as plain WCSPH would. Only the cohesion term of Akinci's
+   * method is implemented (not the curvature/surface-area-minimizing term,
+   * which depends on noisier normal-field estimates); 0 disables it.
+   */
+  surfaceTensionCoefficient: number;
+  /**
    * XSPH velocity-smoothing coefficient (Monaghan 1992), in [0, 1]. Blends
    * each particle's advection velocity toward its local density-weighted
    * neighborhood average before using it to move the particle, without
@@ -82,7 +92,7 @@ export interface SphDiagnostics {
  * The pipeline a step() call must perform, in order, is fixed by this contract:
  *   1. neighbor search (rebuild spatial structure for current positions)
  *   2. density + pressure (Tait EOS)
- *   3. force accumulation (pressure force + viscosity force)
+ *   3. force accumulation (pressure force + viscosity force + surface-tension cohesion force)
  *   4. velocity integration (semi-implicit Euler; forces/gravity only)
  *   5. XSPH velocity smoothing (produces a separate advection velocity —
  *      see SphParams.xsphEpsilon — without altering the integrated one)
