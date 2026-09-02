@@ -232,6 +232,12 @@
         box-shadow: 0 0 0 3px var(--accent-soft);
       }
 
+      input[type="checkbox"] {
+        width: 14px;
+        height: 14px;
+        accent-color: var(--accent);
+      }
+
       input[type="file"] {
         width: 100%;
         font-family: var(--sans);
@@ -288,7 +294,7 @@
           </div>
           <div class="row">
             <label for="model-opacity">Opacity</label>
-            <input id="model-opacity" type="number" step="0.05" min="0" max="1" value="0.15" />
+            <input id="model-opacity" type="number" step="0.05" min="0" max="1" value="0.05" />
           </div>
 
           <h2 class="section">Playback</h2>
@@ -307,6 +313,14 @@
           <div class="row">
             <label for="time-scale">Speed</label>
             <input id="time-scale" type="number" step="0.05" min="0.01" value="1" />
+          </div>
+          <div class="row">
+            <label for="particle-size">Particle Size</label>
+            <input id="particle-size" type="number" step="0.1" min="0.1" max="5" value="0.5" />
+          </div>
+          <div class="row">
+            <label for="floor-drain">Delete at Floor</label>
+            <input id="floor-drain" type="checkbox" />
           </div>
         </section>
 

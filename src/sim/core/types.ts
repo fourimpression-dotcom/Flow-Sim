@@ -46,6 +46,14 @@ export interface SphParams {
   /** Axis-aligned simulation domain (world units, m). */
   domainMin: Vec3Tuple;
   domainMax: Vec3Tuple;
+  /**
+   * When true, a particle that falls below domainMin[1] (the floor) is
+   * removed from the simulation instead of being clamped/reflected back
+   * in — an open-drain behavior, as opposed to the sealed-tank default.
+   * Every other domain wall (side walls, ceiling) always clamps/reflects
+   * regardless of this flag.
+   */
+  deleteParticlesAtFloor: boolean;
 }
 
 /** Lightweight scalar summary of simulation state, for verification/monitoring. */

@@ -1,4 +1,5 @@
 import * as THREE from "three/webgpu";
+import { distance, instancedBufferAttribute, oneMinus, smoothstep, uv, vec2 } from "three/tsl";
 import { StepLoader } from "./loader/StepLoader";
 import type { LoadedMesh } from "./loader/types";
 import { Viewer } from "./scene/Viewer";
@@ -6,7 +7,8 @@ import { SphSimulation } from "./sim/SphSimulation";
 import { CpuSphBackend } from "./sim/backends/cpu/CpuSphBackend";
 import { computeDefaultWaterSource, createDamBreakScenario, type ObstacleBounds } from "./sim/core/scenario";
 import type { WaterBlockSource } from "./sim/core/types";
-import { buildSignedDistanceField, type TriangleSoup } from "./sim/geometry/buildSignedDistanceField";
+import type { TriangleSoup } from "./sim/geometry/buildSignedDistanceField";
+import { SdfBuilder } from "./sim/geometry/SdfBuilder";
 import type { SignedDistanceField } from "./sim/geometry/signedDistanceField";
 import { errorMessage, requireElement } from "./dom";
 
@@ -16,6 +18,8 @@ const modelOpacityInput = requireElement<HTMLInputElement>("#model-opacity");
 const playPauseButton = requireElement<HTMLButtonElement>("#play-pause-button");
 const stopButton = requireElement<HTMLButtonElement>("#stop-button");
 const timeScaleInput = requireElement<HTMLInputElement>("#time-scale");
+const particleSizeInput = requireElement<HTMLInputElement>("#particle-size");
+const floorDrainCheckbox = requireElement<HTMLInputElement>("#floor-drain");
 const applySourceButton = requireElement<HTMLButtonElement>("#apply-source-button");
 const clearSourceButton = requireElement<HTMLButtonElement>("#clear-source-button");
 const sourceCenterXInput = requireElement<HTMLInputElement>("#source-center-x");
@@ -56,29 +60,53 @@ async function main(): Promise<void> {
   setStatus("Initializing renderer...");
   const viewer = await Viewer.create(canvas);
   const loader = new StepLoader();
+  const sdfBuilder = new SdfBuilder();
   setStatus("Idle");
 
-  const particleGeometry = new THREE.BufferGeometry();
-  // Always keep a valid (if empty) position attribute — rendering a Points
-  // object whose geometry has no attributes at all can throw inside the
-  // renderer, which would kill the animation loop entirely.
-  particleGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
-  const particleMaterial = new THREE.PointsMaterial({
+  // WebGPU's `Points` primitive is hard-locked to a 1px screen size — three's
+  // own PointsNodeMaterial docs note that a `material.size` (or sizeNode) has
+  // no effect when used with a `Points` object under WebGPU. To get a
+  // variable, size-attenuated particle size on both the WebGPU and WebGL2
+  // backends, particles are instead drawn as a single instanced Sprite: one
+  // billboard quad, drawn `count` times, each instance reading its center
+  // from `positionNode` (an instancedBufferAttribute over the simulation's
+  // position buffer) — the exact pattern PointsNodeMaterial's doc comment
+  // describes for this case.
+  const particleMaterial = new THREE.PointsNodeMaterial({
     color: 0x39ff14,
     size: 0.014,
     sizeAttenuation: true,
+    // The billboard quad itself is square; masking it down to a circle
+    // (discarding corner pixels via alphaTest, rather than alpha-blending
+    // a soft edge) is what makes each particle actually read as a round
+    // droplet instead of a square, without needing per-instance sort order
+    // for correct overlap/occlusion.
+    transparent: false,
+    alphaTest: 0.5,
+    opacityNode: oneMinus(smoothstep(0.42, 0.5, distance(uv(), vec2(0.5, 0.5)))),
   });
-  const points = new THREE.Points(particleGeometry, particleMaterial);
-  points.visible = false;
-  // The renderer frustum-culls Points using geometry.boundingSphere, which
-  // is computed once (lazily, from wherever the initial water block is) and
-  // never automatically recomputed as positionAttribute.needsUpdate keeps
-  // being set. Left on, that stale sphere can end up outside the camera
-  // frustum while the actual (moved) particles are still on-screen, making
-  // the water vanish depending on zoom/orientation. The particle count here
-  // is small enough that skipping culling entirely is cheap.
-  points.frustumCulled = false;
-  viewer.scene.add(points);
+  // The physically-meaningful base size (smoothingRadius * 0.4, set per
+  // scenario in startSimulation); the Particle Size UI control is a
+  // multiplier on top of this, not an absolute size, so it stays sensible
+  // across different particle spacings instead of needing manual re-tuning.
+  let baseParticleSize = particleMaterial.size;
+  function applyParticleSize(): void {
+    const multiplier = Math.max(Number(particleSizeInput.value) || 1, 0.05);
+    particleMaterial.size = baseParticleSize * multiplier;
+  }
+  // Reassigned (a new instancedBufferAttribute) each time a simulation
+  // starts, since the particle count — and so the buffer length — changes
+  // per scenario; kept here so the per-frame update loop can flag it dirty.
+  let particlePositionAttribute: THREE.InstancedBufferAttribute | null = null;
+  const particles = new THREE.Sprite(particleMaterial);
+  particles.visible = false;
+  particles.count = 0;
+  // The Sprite's own local geometry is a fixed unit quad shared by all
+  // instances; its bounding sphere has nothing to do with the actual
+  // (world-scattered) particle cloud, so frustum-culling against it would
+  // hide particles that are still genuinely on-screen.
+  particles.frustumCulled = false;
+  viewer.scene.add(particles);
 
   // Obstacle state from the last loaded STEP file, if any. The collision
   // field is built lazily (only once simulation is actually turned on) so
@@ -141,17 +169,21 @@ async function main(): Promise<void> {
       scenario.initialVelocities
     );
     simulation.setCollisionField(collisionField);
+    simulation.setDeleteParticlesAtFloor(floorDrainCheckbox.checked);
 
-    particleMaterial.size = scenario.params.smoothingRadius * 0.4;
+    baseParticleSize = scenario.params.smoothingRadius * 0.4;
+    applyParticleSize();
 
-    const positionAttribute = new THREE.BufferAttribute(simulation.getPositions(), 3);
-    positionAttribute.setUsage(THREE.DynamicDrawUsage);
-    particleGeometry.setAttribute("position", positionAttribute);
-    // Only reveal the points once the geometry actually holds this
+    particlePositionAttribute = new THREE.InstancedBufferAttribute(simulation.getPositions(), 3);
+    particlePositionAttribute.setUsage(THREE.DynamicDrawUsage);
+    particleMaterial.positionNode = instancedBufferAttribute(particlePositionAttribute);
+    particleMaterial.needsUpdate = true;
+    particles.count = simulation.particleCount;
+    // Only reveal the particles once the material actually holds this
     // simulation's data — showing it earlier (e.g. right when the toggle is
     // checked, before an async SDF build finishes) would render a stale or
     // empty attribute for a frame or more.
-    points.visible = true;
+    particles.visible = true;
 
     // The floor grid always follows the current domain, even when the
     // camera doesn't — otherwise the grid keeps showing wherever it was last
@@ -197,9 +229,35 @@ async function main(): Promise<void> {
         Math.min(Math.max(paddedExtent / spacingForResolution, 32), 128)
       );
 
-      collisionField = buildSignedDistanceField(pendingObstacleMesh, { padding, resolution });
+      // Collision code only ever checks the sampled distance against a
+      // small margin (see CpuSphBackend's enforceMeshCollision) — points
+      // farther than that never need an exact value, only a value that's
+      // clearly still >= margin. A generous multiple of the particle
+      // spacing is well past that margin (margin itself is ~0.65x spacing)
+      // while staying tiny relative to the model, which is what keeps the
+      // SDF build fast (see BuildSdfOptions.maxSearchDistance).
+      const maxSearchDistance = spacingForResolution * 4;
+
+      collisionField = await sdfBuilder.build(pendingObstacleMesh, { padding, resolution, maxSearchDistance });
     }
     startSimulation(reframeCamera);
+  }
+
+  /**
+   * Fire-and-forget entry point for ensureCollisionFieldAndStart. A bare
+   * `void ensureCollisionFieldAndStart(...)` would leave a worker-side
+   * failure (or, previously, any thrown error) as an unhandled promise
+   * rejection: status stuck on "Building collision field...", isPlaying
+   * left true, and no water ever appearing — indistinguishable from a
+   * genuine hang. This surfaces the failure instead.
+   */
+  function runEnsureCollisionFieldAndStart(reframeCamera: boolean): void {
+    ensureCollisionFieldAndStart(reframeCamera).catch((err: unknown) => {
+      console.error(err);
+      isPlaying = false;
+      updatePlayPauseButton();
+      setStatus(`Failed to build collision field: ${errorMessage(err)}`);
+    });
   }
 
   async function handleFile(file: File): Promise<void> {
@@ -248,6 +306,12 @@ async function main(): Promise<void> {
     viewer.setOpacity(Number(modelOpacityInput.value));
   });
 
+  particleSizeInput.addEventListener("input", applyParticleSize);
+
+  floorDrainCheckbox.addEventListener("change", () => {
+    simulation?.setDeleteParticlesAtFloor(floorDrainCheckbox.checked);
+  });
+
   app.addEventListener("dragover", (event) => {
     event.preventDefault();
   });
@@ -277,7 +341,7 @@ async function main(): Promise<void> {
       viewer.hideSourcePreview();
       if (simulation === null) {
         // Stopped -> fresh start.
-        void ensureCollisionFieldAndStart(false);
+        runEnsureCollisionFieldAndStart(false);
       }
       // Paused -> just resume in place; the frozen positions are untouched.
     }
@@ -286,7 +350,7 @@ async function main(): Promise<void> {
 
   stopButton.addEventListener("click", () => {
     isPlaying = false;
-    points.visible = false;
+    particles.visible = false;
     simulation = null;
     updateSourcePreviewFromForm();
     updatePlayPauseButton();
@@ -328,22 +392,31 @@ async function main(): Promise<void> {
       spacing,
       initialVelocity: [dirX * speed, dirY * speed, dirZ * speed],
     };
+    // The collision field's resolution is sized from the water source's
+    // spacing (see ensureCollisionFieldAndStart) — invalidate the cached
+    // field so a spacing change actually rebuilds it at the new
+    // resolution instead of silently reusing the old (possibly too
+    // coarse) one.
+    collisionField = null;
 
     setStatus("Fluid state set. Press Play to apply it.");
 
     if (simulation !== null) {
-      void ensureCollisionFieldAndStart(false);
+      runEnsureCollisionFieldAndStart(false);
     }
   });
 
   clearSourceButton.addEventListener("click", () => {
     customWaterSource = null;
+    // Same reasoning as in the Apply handler: the default spacing may
+    // differ from whatever the field was last built for.
+    collisionField = null;
     populateSourceForm(computeDefaultWaterSource(obstacleBounds));
     updateSourcePreviewFromForm();
     setStatus("Fluid state cleared (back to the default placement)");
 
     if (simulation !== null) {
-      void ensureCollisionFieldAndStart(false);
+      runEnsureCollisionFieldAndStart(false);
     }
   });
 
@@ -359,8 +432,11 @@ async function main(): Promise<void> {
     const timeScale = Math.max(Number(timeScaleInput.value) || 1, 0);
     simulation.update(Math.min(deltaSeconds, 0.1) * timeScale);
 
-    const positionAttribute = particleGeometry.getAttribute("position") as THREE.BufferAttribute;
-    positionAttribute.needsUpdate = true;
+    // Particle count can shrink over time (floor deletion), so the drawn
+    // instance count is re-synced every frame rather than once at start.
+    particles.count = simulation.particleCount;
+
+    if (particlePositionAttribute) particlePositionAttribute.needsUpdate = true;
 
     statusTimer += deltaSeconds;
     if (statusTimer >= 0.2) {

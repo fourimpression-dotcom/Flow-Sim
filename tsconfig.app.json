@@ -17,5 +17,5 @@
     "noEmit": true
   },
   "include": ["src"],
-  "exclude": ["src/loader/stepLoader.worker.ts"]
+  "exclude": ["src/loader/stepLoader.worker.ts", "src/sim/geometry/buildSignedDistanceField.worker.ts"]
 }

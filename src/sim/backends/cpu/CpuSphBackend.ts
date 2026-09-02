@@ -259,14 +259,24 @@ export class CpuSphBackend implements SphComputeBackend {
   }
 
   private enforceBoundary(params: SphParams): void {
-    const { domainMin, domainMax, boundaryDamping } = params;
+    const { domainMin, domainMax, boundaryDamping, deleteParticlesAtFloor } = params;
     const axisNormals: Vec3Tuple[] = [
       [1, 0, 0],
       [0, 1, 0],
       [0, 0, 1],
     ];
 
-    for (let i = 0; i < this.count; i++) {
+    // A plain for-loop doesn't work here once particles can be removed
+    // mid-pass: removing index i swaps the last active particle into its
+    // slot, which then still needs to be checked itself rather than
+    // skipped, so i is only advanced when nothing was removed.
+    let i = 0;
+    while (i < this.count) {
+      if (deleteParticlesAtFloor && this.positions[i * 3 + 1]! < domainMin[1]!) {
+        this.removeParticleAt(i);
+        continue;
+      }
+
       for (let axis = 0; axis < 3; axis++) {
         const idx = i * 3 + axis;
         const pos = this.positions[idx]!;
@@ -296,6 +306,23 @@ export class CpuSphBackend implements SphComputeBackend {
         this.velocities[i * 3 + 1] = vy;
         this.velocities[i * 3 + 2] = vz;
       }
+
+      i++;
     }
+  }
+
+  /** Removes particle i by swapping in the last active particle and shrinking the active count by one. */
+  private removeParticleAt(i: number): void {
+    const last = this.count - 1;
+    if (i !== last) {
+      for (let axis = 0; axis < 3; axis++) {
+        this.positions[i * 3 + axis] = this.positions[last * 3 + axis]!;
+        this.velocities[i * 3 + axis] = this.velocities[last * 3 + axis]!;
+        this.forces[i * 3 + axis] = this.forces[last * 3 + axis]!;
+      }
+      this.densities[i] = this.densities[last]!;
+      this.pressures[i] = this.pressures[last]!;
+    }
+    this.count--;
   }
 }

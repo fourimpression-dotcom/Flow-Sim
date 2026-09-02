@@ -9,7 +9,7 @@ interface ModelPart {
 }
 
 const EDGE_ANGLE_THRESHOLD_DEGREES = 20;
-const DEFAULT_OPACITY = 0.15;
+const DEFAULT_OPACITY = 0.05;
 const MODEL_COLOR = 0x8899aa;
 
 /**

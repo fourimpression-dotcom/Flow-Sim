@@ -36,6 +36,11 @@ export class SphSimulation {
     this.backend.setCollisionField(field);
   }
 
+  /** Toggles whether particles that fall below the floor are deleted rather than bounced back in — takes effect on the next step. */
+  setDeleteParticlesAtFloor(enabled: boolean): void {
+    this.params.deleteParticlesAtFloor = enabled;
+  }
+
   /** Advances the simulation to cover `deltaSeconds` of wall-clock time. */
   update(deltaSeconds: number): void {
     this.accumulatedSeconds += deltaSeconds;

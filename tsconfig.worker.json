@@ -18,6 +18,12 @@
   "include": [
     "src/loader/stepLoader.worker.ts",
     "src/loader/occt-import-js.d.ts",
-    "src/loader/types.ts"
+    "src/loader/types.ts",
+    "src/sim/geometry/buildSignedDistanceField.worker.ts",
+    "src/sim/geometry/buildSignedDistanceField.ts",
+    "src/sim/geometry/signedDistanceField.ts",
+    "src/sim/geometry/sdfWorkerTypes.ts",
+    "src/sim/geometry/triangleDistance.ts",
+    "src/sim/core/types.ts"
   ]
 }

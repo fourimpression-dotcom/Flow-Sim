@@ -143,6 +143,8 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     boundaryDamping: 0.5,
     domainMin,
     domainMax,
+    // Off by default (sealed tank); toggled at runtime via SphSimulation.setDeleteParticlesAtFloor.
+    deleteParticlesAtFloor: false,
   };
 
   return { params, initialPositions: Float32Array.from(positions), initialVelocities: velocities };
