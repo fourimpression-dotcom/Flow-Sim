@@ -138,6 +138,10 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     stiffness,
     gamma,
     viscosity: 0.6,
+    // Mild smoothing: enough to visibly reduce jitter without noticeably
+    // over-damping the flow (Monaghan's original paper allows up to ~0.5;
+    // real-time SPH tends to use less).
+    xsphEpsilon: 0.1,
     gravity: [0, -9.81, 0],
     timeStep,
     boundaryDamping: 0.5,

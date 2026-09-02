@@ -20,8 +20,7 @@ const stopButton = requireElement<HTMLButtonElement>("#stop-button");
 const timeScaleInput = requireElement<HTMLInputElement>("#time-scale");
 const particleSizeInput = requireElement<HTMLInputElement>("#particle-size");
 const floorDrainCheckbox = requireElement<HTMLInputElement>("#floor-drain");
-const applySourceButton = requireElement<HTMLButtonElement>("#apply-source-button");
-const clearSourceButton = requireElement<HTMLButtonElement>("#clear-source-button");
+const resetSourceButton = requireElement<HTMLButtonElement>("#reset-source-button");
 const sourceCenterXInput = requireElement<HTMLInputElement>("#source-center-x");
 const sourceCenterYInput = requireElement<HTMLInputElement>("#source-center-y");
 const sourceCenterZInput = requireElement<HTMLInputElement>("#source-center-z");
@@ -114,6 +113,11 @@ async function main(): Promise<void> {
   let obstacleBounds: ObstacleBounds | undefined;
   let pendingObstacleMesh: TriangleSoup | undefined;
   let collisionField: SignedDistanceField | null = null;
+  // The particle spacing collisionField was actually built at — the SDF's
+  // resolution is sized from spacing (see ensureCollisionFieldAndStart), so
+  // a stale field built for a different spacing needs to be rebuilt even
+  // though collisionField is technically non-null.
+  let collisionFieldSpacing: number | null = null;
   // Three states: stopped (simulation === null, no water), paused
   // (simulation set but isPlaying false — particles frozen in place), and
   // playing (simulation set and isPlaying true — physics stepping each
@@ -123,12 +127,11 @@ async function main(): Promise<void> {
   let simulation: SphSimulation | null = null;
   let isPlaying = false;
 
-  // User-specified water source (center/size/direction/speed via the form),
-  // overriding the default "drop a block in the corner" placement. The form
-  // starts pre-filled with the values equivalent to that default (see
-  // populateSourceForm below) so the user has a sensible starting point to
-  // tweak from rather than arbitrary placeholders.
-  let customWaterSource: WaterBlockSource | null = null;
+  // The Fluid State form is the single source of truth for the water
+  // source — no separate "Apply" step. It starts pre-filled with the
+  // values equivalent to the default "drop a block in the corner"
+  // placement (see populateSourceForm below), and starting a simulation
+  // always reads whatever is currently in the form (buildWaterSourceFromForm).
   populateSourceForm(computeDefaultWaterSource());
 
   /** Shows a wireframe box for whatever center/size the form currently has, live as it's edited — before Apply, before Play. */
@@ -160,7 +163,7 @@ async function main(): Promise<void> {
   function startSimulation(reframeCamera: boolean): void {
     const scenario = createDamBreakScenario({
       obstacle: obstacleBounds,
-      waterSource: customWaterSource ?? undefined,
+      waterSource: buildWaterSourceFromForm(),
     });
     simulation = new SphSimulation(
       new CpuSphBackend(),
@@ -204,41 +207,51 @@ async function main(): Promise<void> {
   }
 
   async function ensureCollisionFieldAndStart(reframeCamera: boolean): Promise<void> {
-    if (pendingObstacleMesh && !collisionField) {
-      setStatus("Building collision field...");
-      // Let the status text actually paint before the synchronous SDF build blocks the main thread.
-      await new Promise(requestAnimationFrame);
+    if (pendingObstacleMesh) {
+      // The SDF's resolution is sized from spacing below — a field built
+      // for a different spacing than the form currently has is stale even
+      // though collisionField is non-null, so it needs rebuilding too.
+      const spacingForResolution = buildWaterSourceFromForm().spacing;
+      if (collisionField && spacingForResolution !== collisionFieldSpacing) {
+        collisionField = null;
+      }
 
-      const bounds = obstacleBounds!;
-      const sizeX = bounds.max[0] - bounds.min[0];
-      const sizeY = bounds.max[1] - bounds.min[1];
-      const sizeZ = bounds.max[2] - bounds.min[2];
-      const maxDim = Math.max(sizeX, sizeY, sizeZ, 1e-6);
-      const padding = maxDim * 0.2;
+      if (!collisionField) {
+        setStatus("Building collision field...");
+        // Let the status text actually paint before the SDF build starts.
+        await new Promise(requestAnimationFrame);
 
-      // A fixed resolution can't resolve features (grooves, thin walls)
-      // much smaller than the model's own overall size — a 2mm groove is
-      // invisible to a grid whose cells are already several mm wide. Size
-      // the grid so its cell size roughly matches the particle spacing
-      // that'll actually be used, instead of a size unrelated to it.
-      // Capped both ways: never coarser than the old fixed default, and
-      // never so fine that voxelizing a large model explodes in cost.
-      const spacingForResolution = customWaterSource?.spacing ?? computeDefaultWaterSource(obstacleBounds).spacing;
-      const paddedExtent = maxDim + 2 * padding;
-      const resolution = Math.round(
-        Math.min(Math.max(paddedExtent / spacingForResolution, 32), 128)
-      );
+        const bounds = obstacleBounds!;
+        const sizeX = bounds.max[0] - bounds.min[0];
+        const sizeY = bounds.max[1] - bounds.min[1];
+        const sizeZ = bounds.max[2] - bounds.min[2];
+        const maxDim = Math.max(sizeX, sizeY, sizeZ, 1e-6);
+        const padding = maxDim * 0.2;
 
-      // Collision code only ever checks the sampled distance against a
-      // small margin (see CpuSphBackend's enforceMeshCollision) — points
-      // farther than that never need an exact value, only a value that's
-      // clearly still >= margin. A generous multiple of the particle
-      // spacing is well past that margin (margin itself is ~0.65x spacing)
-      // while staying tiny relative to the model, which is what keeps the
-      // SDF build fast (see BuildSdfOptions.maxSearchDistance).
-      const maxSearchDistance = spacingForResolution * 4;
+        // A fixed resolution can't resolve features (grooves, thin walls)
+        // much smaller than the model's own overall size — a 2mm groove is
+        // invisible to a grid whose cells are already several mm wide. Size
+        // the grid so its cell size roughly matches the particle spacing
+        // that'll actually be used, instead of a size unrelated to it.
+        // Capped both ways: never coarser than the old fixed default, and
+        // never so fine that voxelizing a large model explodes in cost.
+        const paddedExtent = maxDim + 2 * padding;
+        const resolution = Math.round(
+          Math.min(Math.max(paddedExtent / spacingForResolution, 32), 128)
+        );
 
-      collisionField = await sdfBuilder.build(pendingObstacleMesh, { padding, resolution, maxSearchDistance });
+        // Collision code only ever checks the sampled distance against a
+        // small margin (see CpuSphBackend's enforceMeshCollision) — points
+        // farther than that never need an exact value, only a value that's
+        // clearly still >= margin. A generous multiple of the particle
+        // spacing is well past that margin (margin itself is ~0.65x spacing)
+        // while staying tiny relative to the model, which is what keeps the
+        // SDF build fast (see BuildSdfOptions.maxSearchDistance).
+        const maxSearchDistance = spacingForResolution * 4;
+
+        collisionField = await sdfBuilder.build(pendingObstacleMesh, { padding, resolution, maxSearchDistance });
+        collisionFieldSpacing = spacingForResolution;
+      }
     }
     startSimulation(reframeCamera);
   }
@@ -357,64 +370,15 @@ async function main(): Promise<void> {
     setStatus("Stopped");
   });
 
-  applySourceButton.addEventListener("click", () => {
-    const center: [number, number, number] = [
-      (Number(sourceCenterXInput.value) || 0) * MM_TO_METERS,
-      (Number(sourceCenterYInput.value) || 0) * MM_TO_METERS,
-      (Number(sourceCenterZInput.value) || 0) * MM_TO_METERS,
-    ];
-    const size: [number, number, number] = [
-      (Number(sourceSizeXInput.value) || 200) * MM_TO_METERS,
-      (Number(sourceSizeYInput.value) || 200) * MM_TO_METERS,
-      (Number(sourceSizeZInput.value) || 200) * MM_TO_METERS,
-    ];
-    const spacing = (Number(sourceSpacingInput.value) || 20) * MM_TO_METERS;
-    const speed = Number(sourceSpeedInput.value) || 0;
-
-    let dirX = Number(sourceDirXInput.value) || 0;
-    let dirY = Number(sourceDirYInput.value) || 0;
-    let dirZ = Number(sourceDirZInput.value) || 0;
-    const dirLength = Math.hypot(dirX, dirY, dirZ);
-    if (dirLength < 1e-9) {
-      // Degenerate (all-zero) direction: fall back to straight down.
-      dirX = 0;
-      dirY = -1;
-      dirZ = 0;
-    } else {
-      dirX /= dirLength;
-      dirY /= dirLength;
-      dirZ /= dirLength;
-    }
-
-    customWaterSource = {
-      center,
-      size,
-      spacing,
-      initialVelocity: [dirX * speed, dirY * speed, dirZ * speed],
-    };
-    // The collision field's resolution is sized from the water source's
-    // spacing (see ensureCollisionFieldAndStart) — invalidate the cached
-    // field so a spacing change actually rebuilds it at the new
-    // resolution instead of silently reusing the old (possibly too
-    // coarse) one.
-    collisionField = null;
-
-    setStatus("Fluid state set. Press Play to apply it.");
-
-    if (simulation !== null) {
-      runEnsureCollisionFieldAndStart(false);
-    }
-  });
-
-  clearSourceButton.addEventListener("click", () => {
-    customWaterSource = null;
-    // Same reasoning as in the Apply handler: the default spacing may
-    // differ from whatever the field was last built for.
-    collisionField = null;
+  resetSourceButton.addEventListener("click", () => {
     populateSourceForm(computeDefaultWaterSource(obstacleBounds));
     updateSourcePreviewFromForm();
-    setStatus("Fluid state cleared (back to the default placement)");
+    setStatus("Fluid state reset to the default placement");
 
+    // If water is currently shown, reflect the reset immediately rather
+    // than waiting for the next Run — matching Run's own "always reads the
+    // current form" behavior (collisionField rebuilds automatically inside
+    // ensureCollisionFieldAndStart if the default spacing differs).
     if (simulation !== null) {
       runEnsureCollisionFieldAndStart(false);
     }
@@ -474,6 +438,44 @@ function populateSourceForm(source: WaterBlockSource): void {
     sourceDirZInput.value = "0";
   }
   sourceSpeedInput.value = speed.toFixed(4);
+}
+
+/** Reads the Fluid State form (mm/m-per-second) into a WaterBlockSource (m) — the form is the single source of truth for the water source, read fresh every time a simulation starts. */
+function buildWaterSourceFromForm(): WaterBlockSource {
+  const center: [number, number, number] = [
+    (Number(sourceCenterXInput.value) || 0) * MM_TO_METERS,
+    (Number(sourceCenterYInput.value) || 0) * MM_TO_METERS,
+    (Number(sourceCenterZInput.value) || 0) * MM_TO_METERS,
+  ];
+  const size: [number, number, number] = [
+    (Number(sourceSizeXInput.value) || 200) * MM_TO_METERS,
+    (Number(sourceSizeYInput.value) || 200) * MM_TO_METERS,
+    (Number(sourceSizeZInput.value) || 200) * MM_TO_METERS,
+  ];
+  const spacing = (Number(sourceSpacingInput.value) || 20) * MM_TO_METERS;
+  const speed = Number(sourceSpeedInput.value) || 0;
+
+  let dirX = Number(sourceDirXInput.value) || 0;
+  let dirY = Number(sourceDirYInput.value) || 0;
+  let dirZ = Number(sourceDirZInput.value) || 0;
+  const dirLength = Math.hypot(dirX, dirY, dirZ);
+  if (dirLength < 1e-9) {
+    // Degenerate (all-zero) direction: fall back to straight down.
+    dirX = 0;
+    dirY = -1;
+    dirZ = 0;
+  } else {
+    dirX /= dirLength;
+    dirY /= dirLength;
+    dirZ /= dirLength;
+  }
+
+  return {
+    center,
+    size,
+    spacing,
+    initialVelocity: [dirX * speed, dirY * speed, dirZ * speed],
+  };
 }
 
 /**

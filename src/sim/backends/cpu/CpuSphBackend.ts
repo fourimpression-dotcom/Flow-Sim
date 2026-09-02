@@ -15,11 +15,12 @@ import { SpatialGrid } from "./spatialGrid";
 /**
  * Reference CPU implementation of SphComputeBackend: a plain per-particle
  * loop over typed arrays, run on the main thread. Implements the fixed
- * 6-stage pipeline (neighbor search -> density/pressure -> forces ->
- * integrate -> mesh collision -> domain boundary) declared by the
- * SphComputeBackend contract, using the shared kernel/collision formulas
- * from core/kernels.ts and core/collision.ts verbatim — this is the pairing
- * a future GPU backend must reproduce.
+ * 8-stage pipeline (neighbor search -> density/pressure -> forces ->
+ * velocity integration -> XSPH smoothing -> position integration -> mesh
+ * collision -> domain boundary) declared by the SphComputeBackend contract,
+ * using the shared kernel/collision formulas from core/kernels.ts and
+ * core/collision.ts verbatim — this is the pairing a future GPU backend
+ * must reproduce.
  */
 export class CpuSphBackend implements SphComputeBackend {
   private count = 0;
@@ -28,6 +29,10 @@ export class CpuSphBackend implements SphComputeBackend {
   private densities = new Float32Array(0);
   private pressures = new Float32Array(0);
   private forces = new Float32Array(0);
+  // Scratch, recomputed every step: the XSPH-smoothed velocity used only to
+  // advect position (see computeXsphCorrection). Not part of persistent
+  // particle state, so removeParticleAt never needs to touch it.
+  private advectionVelocities = new Float32Array(0);
   private grid: SpatialGrid | null = null;
   private collisionField: SignedDistanceField | null = null;
   private readonly neighborScratch: number[] = [];
@@ -43,6 +48,7 @@ export class CpuSphBackend implements SphComputeBackend {
     this.densities = new Float32Array(this.count);
     this.pressures = new Float32Array(this.count);
     this.forces = new Float32Array(this.count * 3);
+    this.advectionVelocities = new Float32Array(this.count * 3);
     this.grid = new SpatialGrid(params.smoothingRadius);
   }
 
@@ -58,7 +64,9 @@ export class CpuSphBackend implements SphComputeBackend {
     this.grid.build(this.positions, this.count);
     this.computeDensityPressure(params);
     this.computeForces(params);
-    this.integrate(params);
+    this.integrateVelocity(params);
+    this.computeXsphCorrection(params);
+    this.integratePosition(params);
     this.enforceMeshCollision(params);
     this.enforceBoundary(params);
   }
@@ -189,7 +197,7 @@ export class CpuSphBackend implements SphComputeBackend {
     }
   }
 
-  private integrate(params: SphParams): void {
+  private integrateVelocity(params: SphParams): void {
     const dt = params.timeStep;
     const [gx, gy, gz] = params.gravity;
     const minDensity = 1e-6;
@@ -201,17 +209,81 @@ export class CpuSphBackend implements SphComputeBackend {
       const ay = this.forces[i * 3 + 1]! / density + gy;
       const az = this.forces[i * 3 + 2]! / density + gz;
 
-      const vx = this.velocities[i * 3]! + ax * dt;
-      const vy = this.velocities[i * 3 + 1]! + ay * dt;
-      const vz = this.velocities[i * 3 + 2]! + az * dt;
+      this.velocities[i * 3] = this.velocities[i * 3]! + ax * dt;
+      this.velocities[i * 3 + 1] = this.velocities[i * 3 + 1]! + ay * dt;
+      this.velocities[i * 3 + 2] = this.velocities[i * 3 + 2]! + az * dt;
+    }
+  }
 
-      this.velocities[i * 3] = vx;
-      this.velocities[i * 3 + 1] = vy;
-      this.velocities[i * 3 + 2] = vz;
+  /**
+   * XSPH velocity smoothing (Monaghan 1992): blends each particle's
+   * velocity toward its local density-weighted neighborhood average,
+   *
+   *   v_i* = v_i + epsilon * sum_j (2 m_j)/(rho_i+rho_j) * (v_j - v_i) * W_poly6(r_ij, h)
+   *
+   * and uses only that result (advectionVelocities) to move the particle
+   * next — the velocity stored in this.velocities, which pressure/viscosity
+   * and next step's integration read, is left exactly as
+   * integrateVelocity produced it. Keeping the two separate means XSPH acts
+   * purely on advection (making neighboring particles move more coherently,
+   * reducing jitter/clumping) without also quietly adding extra dissipation
+   * to the force balance the way folding it into the stored velocity would.
+   */
+  private computeXsphCorrection(params: SphParams): void {
+    const grid = this.grid!;
+    const h = params.smoothingRadius;
+    const hSq = h * h;
+    const poly6Coeff = poly6Coefficient(h);
+    const scratch = this.neighborScratch;
+    const epsilon = params.xsphEpsilon;
 
-      this.positions[i * 3] = this.positions[i * 3]! + vx * dt;
-      this.positions[i * 3 + 1] = this.positions[i * 3 + 1]! + vy * dt;
-      this.positions[i * 3 + 2] = this.positions[i * 3 + 2]! + vz * dt;
+    for (let i = 0; i < this.count; i++) {
+      const px = this.positions[i * 3]!;
+      const py = this.positions[i * 3 + 1]!;
+      const pz = this.positions[i * 3 + 2]!;
+      const vix = this.velocities[i * 3]!;
+      const viy = this.velocities[i * 3 + 1]!;
+      const viz = this.velocities[i * 3 + 2]!;
+      const densityI = this.densities[i]!;
+
+      grid.queryNeighborCells(px, py, pz, scratch);
+
+      let cx = 0;
+      let cy = 0;
+      let cz = 0;
+
+      for (let k = 0; k < scratch.length; k++) {
+        const j = scratch[k]!;
+        if (j === i) continue;
+
+        const dx = px - this.positions[j * 3]!;
+        const dy = py - this.positions[j * 3 + 1]!;
+        const dz = pz - this.positions[j * 3 + 2]!;
+        const rSq = dx * dx + dy * dy + dz * dz;
+        if (rSq >= hSq) continue;
+
+        const densityAvg = (densityI + this.densities[j]!) * 0.5;
+        if (densityAvg <= 0) continue;
+        const weight = (params.particleMass / densityAvg) * poly6(rSq, h, poly6Coeff);
+
+        cx += weight * (this.velocities[j * 3]! - vix);
+        cy += weight * (this.velocities[j * 3 + 1]! - viy);
+        cz += weight * (this.velocities[j * 3 + 2]! - viz);
+      }
+
+      this.advectionVelocities[i * 3] = vix + epsilon * cx;
+      this.advectionVelocities[i * 3 + 1] = viy + epsilon * cy;
+      this.advectionVelocities[i * 3 + 2] = viz + epsilon * cz;
+    }
+  }
+
+  private integratePosition(params: SphParams): void {
+    const dt = params.timeStep;
+
+    for (let i = 0; i < this.count; i++) {
+      this.positions[i * 3] = this.positions[i * 3]! + this.advectionVelocities[i * 3]! * dt;
+      this.positions[i * 3 + 1] = this.positions[i * 3 + 1]! + this.advectionVelocities[i * 3 + 1]! * dt;
+      this.positions[i * 3 + 2] = this.positions[i * 3 + 2]! + this.advectionVelocities[i * 3 + 2]! * dt;
     }
   }
 

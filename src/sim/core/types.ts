@@ -37,6 +37,15 @@ export interface SphParams {
   gamma: number;
   /** Dynamic viscosity coefficient mu. */
   viscosity: number;
+  /**
+   * XSPH velocity-smoothing coefficient (Monaghan 1992), in [0, 1]. Blends
+   * each particle's advection velocity toward its local density-weighted
+   * neighborhood average before using it to move the particle, without
+   * altering the velocity the force/integration stages see next step.
+   * Reduces jitter/clumping from neighboring particles drifting past each
+   * other; 0 disables it entirely (plain WCSPH advection).
+   */
+  xsphEpsilon: number;
   /** Gravity acceleration vector (m/s^2), e.g. [0, -9.81, 0]. */
   gravity: Vec3Tuple;
   /** Fixed physics timestep (s). Chosen from a CFL-style bound on smoothingRadius/soundSpeed. */
@@ -74,9 +83,12 @@ export interface SphDiagnostics {
  *   1. neighbor search (rebuild spatial structure for current positions)
  *   2. density + pressure (Tait EOS)
  *   3. force accumulation (pressure force + viscosity force)
- *   4. integration (semi-implicit Euler)
- *   5. mesh obstacle collision (signed-distance-field boundary, if set)
- *   6. domain AABB boundary handling
+ *   4. velocity integration (semi-implicit Euler; forces/gravity only)
+ *   5. XSPH velocity smoothing (produces a separate advection velocity —
+ *      see SphParams.xsphEpsilon — without altering the integrated one)
+ *   6. position integration (advected using the XSPH-smoothed velocity)
+ *   7. mesh obstacle collision (signed-distance-field boundary, if set)
+ *   8. domain AABB boundary handling
  * A GPU backend must reproduce this same stage sequence and the same
  * per-stage math (see core/kernels.ts, core/collision.ts) — that is what
  * "shared physics model" means here, since GPU compute code cannot

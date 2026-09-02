@@ -297,7 +297,7 @@
             <input id="model-opacity" type="number" step="0.05" min="0" max="1" value="0.05" />
           </div>
 
-          <h2 class="section">Playback</h2>
+          <h2 class="section">Run</h2>
           <div class="row" style="gap: 6px">
             <button id="play-pause-button" class="primary icon-button" type="button" title="Play" aria-label="Play">
               <svg class="icon-play" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5v11l9-5.5-9-5.5z" /></svg>
@@ -311,15 +311,15 @@
             </button>
           </div>
           <div class="row">
-            <label for="time-scale">Speed</label>
+            <label for="time-scale">Time Scale</label>
             <input id="time-scale" type="number" step="0.05" min="0.01" value="1" />
           </div>
           <div class="row">
             <label for="particle-size">Particle Size</label>
             <input id="particle-size" type="number" step="0.1" min="0.1" max="5" value="0.5" />
           </div>
-          <div class="row">
-            <label for="floor-drain">Delete at Floor</label>
+          <div class="row" title="Remove particles that fall past the floor instead of bouncing them back in">
+            <label for="floor-drain">Dispose</label>
             <input id="floor-drain" type="checkbox" />
           </div>
         </section>
@@ -351,8 +351,7 @@
             <input id="source-speed" type="number" step="0.1" min="0" value="0" />
           </div>
           <div class="actions">
-            <button id="apply-source-button" class="primary">Apply</button>
-            <button id="clear-source-button" class="secondary">Clear</button>
+            <button id="reset-source-button" class="secondary">Reset</button>
           </div>
         </details>
       </div>
