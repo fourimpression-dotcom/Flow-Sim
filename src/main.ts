@@ -181,9 +181,23 @@ async function main(): Promise<void> {
       const sizeX = bounds.max[0] - bounds.min[0];
       const sizeY = bounds.max[1] - bounds.min[1];
       const sizeZ = bounds.max[2] - bounds.min[2];
-      const padding = Math.max(sizeX, sizeY, sizeZ, 1e-6) * 0.2;
+      const maxDim = Math.max(sizeX, sizeY, sizeZ, 1e-6);
+      const padding = maxDim * 0.2;
 
-      collisionField = buildSignedDistanceField(pendingObstacleMesh, { padding, resolution: 32 });
+      // A fixed resolution can't resolve features (grooves, thin walls)
+      // much smaller than the model's own overall size — a 2mm groove is
+      // invisible to a grid whose cells are already several mm wide. Size
+      // the grid so its cell size roughly matches the particle spacing
+      // that'll actually be used, instead of a size unrelated to it.
+      // Capped both ways: never coarser than the old fixed default, and
+      // never so fine that voxelizing a large model explodes in cost.
+      const spacingForResolution = customWaterSource?.spacing ?? computeDefaultWaterSource(obstacleBounds).spacing;
+      const paddedExtent = maxDim + 2 * padding;
+      const resolution = Math.round(
+        Math.min(Math.max(paddedExtent / spacingForResolution, 32), 128)
+      );
+
+      collisionField = buildSignedDistanceField(pendingObstacleMesh, { padding, resolution });
     }
     startSimulation(reframeCamera);
   }

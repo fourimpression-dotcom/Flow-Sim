@@ -191,12 +191,18 @@ export class Viewer {
   }
 
   private applyOpacity(): void {
+    // transparent+no-depth-write only makes sense (and only looks right)
+    // when the surface is actually see-through. Left on at opacity 1, faces
+    // that should occlude each other (concave shapes, overlapping parts)
+    // don't, since the transparent pass never writes depth — some surfaces
+    // end up looking transparent even though opacity is fully opaque.
+    const isOpaque = this.opacity >= 1;
     for (const part of this.modelParts) {
       part.mesh.visible = true;
       part.edges.visible = true;
-      part.material.transparent = true;
+      part.material.transparent = !isOpaque;
       part.material.opacity = this.opacity;
-      part.material.depthWrite = false;
+      part.material.depthWrite = isOpaque;
       part.material.needsUpdate = true;
     }
   }
