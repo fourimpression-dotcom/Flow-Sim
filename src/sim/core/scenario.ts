@@ -42,6 +42,40 @@ const MAX_PARTICLES = 20000;
 // instability actually starts.
 const SURFACE_TENSION_BASE = 0.93;
 
+// Adhesion (see core/kernels.ts's adhesionKernel and
+// CpuSphBackend.computeAdhesionForce) scales the same way as surface
+// tension above — a fixed coefficient's effective acceleration is
+// proportional to adhesionCoefficient * spacing^3 — so it's likewise
+// derived as ADHESION_BASE / spacing^3 rather than a fixed constant. It is
+// deliberately its own constant, not reused from surface tension, since it
+// scales a different force with a different kernel.
+//
+// Calibrated with a "ball leaving a curved surface" test (a small water
+// blob given a sideways nudge at the top of a sphere, tracking how far
+// around the curve it travels before separating): with no adhesion it
+// separates at ~42° from the top (matching the textbook frictionless
+// result); the effect stays negligible up to a few hundred, then crosses a
+// clear tipping point around 225 where it separates past the equator
+// instead (~100°) and stays stable there through 300. Also verified stable
+// over 2000 frames of an unrelated dam-break-onto-obstacle scenario at
+// this value (density ratio bounded, no NaN, no penetration). Instability
+// (rapidly growing energy) starts around 1000 in that same dam-break
+// check, so 250 keeps a 4x margin below it while sitting just past the
+// separation tipping point.
+const ADHESION_BASE = 250;
+
+// Wall friction (see core/kernels.ts's adhesionKernel, reused here purely
+// as a proximity weight, and CpuSphBackend.applyWallFriction) is a
+// per-second damping *rate*, not a force — it does not need spacing
+// normalization the way the two force coefficients above do, since its
+// unconditionally-stable damping formula already keeps a fixed rate's
+// real-time decay consistent regardless of the timestep (which is what
+// varies with spacing/resolution). Chosen so continuous wall contact
+// roughly halves tangential speed every ~0.1s (ln(2)/0.1 ≈ 6.93): fast
+// enough to visibly kill "sliding forever," slow enough not to look like
+// water instantly freezing on contact.
+const WALL_FRICTION_COEFFICIENT = 7;
+
 /**
  * SPH release scenario: a block of water given an initial position, size,
  * and velocity, that falls/flies from t=0 under gravity (and, once
@@ -112,6 +146,7 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
   spacing = clampSpacingForParticleBudget(blockMin, blockMax, spacing);
   const smoothingRadius = spacing * 1.3; // h; ~1.2-1.5x spacing gives ~30-40 neighbors in 3D
   const surfaceTensionCoefficient = SURFACE_TENSION_BASE / (spacing * spacing * spacing);
+  const adhesionCoefficient = ADHESION_BASE / (spacing * spacing * spacing);
 
   const positions: number[] = [];
   for (let x = blockMin[0]; x <= blockMax[0]; x += spacing) {
@@ -167,6 +202,8 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     xsphEpsilon: 0.1,
     maxSpeed,
     surfaceTensionCoefficient,
+    adhesionCoefficient,
+    wallFrictionCoefficient: WALL_FRICTION_COEFFICIENT,
     gravity: [0, -9.81, 0],
     timeStep,
     boundaryDamping: 0.5,

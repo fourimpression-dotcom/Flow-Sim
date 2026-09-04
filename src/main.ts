@@ -19,8 +19,11 @@ const playPauseButton = requireElement<HTMLButtonElement>("#play-pause-button");
 const stopButton = requireElement<HTMLButtonElement>("#stop-button");
 const timeScaleInput = requireElement<HTMLInputElement>("#time-scale");
 const particleSizeInput = requireElement<HTMLInputElement>("#particle-size");
+const viscosityInput = requireElement<HTMLInputElement>("#viscosity");
 const floorDrainCheckbox = requireElement<HTMLInputElement>("#floor-drain");
 const surfaceTensionCheckbox = requireElement<HTMLInputElement>("#surface-tension");
+const wettingStrengthInput = requireElement<HTMLInputElement>("#wetting-strength");
+const wallFrictionStrengthInput = requireElement<HTMLInputElement>("#wall-friction-strength");
 const resetSourceButton = requireElement<HTMLButtonElement>("#reset-source-button");
 const sourceCenterXInput = requireElement<HTMLInputElement>("#source-center-x");
 const sourceCenterYInput = requireElement<HTMLInputElement>("#source-center-y");
@@ -175,6 +178,9 @@ async function main(): Promise<void> {
     simulation.setCollisionField(collisionField);
     simulation.setDeleteParticlesAtFloor(floorDrainCheckbox.checked);
     simulation.setSurfaceTensionEnabled(surfaceTensionCheckbox.checked);
+    simulation.setAdhesionStrength(Number(wettingStrengthInput.value));
+    simulation.setWallFrictionStrength(Number(wallFrictionStrengthInput.value));
+    simulation.setViscosity(Number(viscosityInput.value));
 
     baseParticleSize = scenario.params.smoothingRadius * 0.4;
     applyParticleSize();
@@ -329,6 +335,18 @@ async function main(): Promise<void> {
 
   surfaceTensionCheckbox.addEventListener("change", () => {
     simulation?.setSurfaceTensionEnabled(surfaceTensionCheckbox.checked);
+  });
+
+  wettingStrengthInput.addEventListener("input", () => {
+    simulation?.setAdhesionStrength(Number(wettingStrengthInput.value));
+  });
+
+  wallFrictionStrengthInput.addEventListener("input", () => {
+    simulation?.setWallFrictionStrength(Number(wallFrictionStrengthInput.value));
+  });
+
+  viscosityInput.addEventListener("input", () => {
+    simulation?.setViscosity(Number(viscosityInput.value));
   });
 
   app.addEventListener("dragover", (event) => {

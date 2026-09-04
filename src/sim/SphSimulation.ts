@@ -15,11 +15,14 @@ const MAX_SUBSTEPS_PER_UPDATE = 8;
 export class SphSimulation {
   private readonly backend: SphComputeBackend;
   private readonly params: SphParams;
-  // The scenario-computed coefficient (see scenario.ts — it's derived from
-  // particle spacing, not a fixed constant), kept aside so toggling surface
-  // tension back on restores the right value rather than some arbitrary
-  // default.
+  // The scenario-computed coefficients (see scenario.ts — both are derived
+  // from particle spacing, not fixed constants), kept aside so toggling
+  // either back on restores the right value rather than some arbitrary
+  // default. Two separate fields for two separate forces — see
+  // SphParams.surfaceTensionCoefficient / .adhesionCoefficient.
   private readonly baseSurfaceTensionCoefficient: number;
+  private readonly baseAdhesionCoefficient: number;
+  private readonly baseWallFrictionCoefficient: number;
   private accumulatedSeconds = 0;
 
   constructor(
@@ -31,6 +34,8 @@ export class SphSimulation {
     this.backend = backend;
     this.params = params;
     this.baseSurfaceTensionCoefficient = params.surfaceTensionCoefficient;
+    this.baseAdhesionCoefficient = params.adhesionCoefficient;
+    this.baseWallFrictionCoefficient = params.wallFrictionCoefficient;
     this.backend.init(initialPositions, params, initialVelocities);
   }
 
@@ -47,9 +52,35 @@ export class SphSimulation {
     this.params.deleteParticlesAtFloor = enabled;
   }
 
-  /** Toggles surface-tension cohesion on/off, restoring the scenario's own spacing-calibrated coefficient rather than a fixed value — takes effect on the next step. */
+  /** Sets the fluid's dynamic viscosity coefficient directly (not a multiplier — viscosity, unlike surface tension/adhesion, isn't spacing-derived) — takes effect on the next step. */
+  setViscosity(value: number): void {
+    this.params.viscosity = value;
+  }
+
+  /** Toggles surface-tension cohesion (fluid-fluid) on/off, restoring the scenario's own spacing-calibrated coefficient rather than a fixed value — takes effect on the next step. */
   setSurfaceTensionEnabled(enabled: boolean): void {
     this.params.surfaceTensionCoefficient = enabled ? this.baseSurfaceTensionCoefficient : 0;
+  }
+
+  /**
+   * Scales wall adhesion (fluid-solid) strength — a separate force from
+   * surface tension, see SphParams.adhesionCoefficient — as a multiplier on
+   * the scenario's own spacing-calibrated coefficient (1 = as calibrated, 0
+   * = off) rather than replacing it with a fixed value. Takes effect on the
+   * next step.
+   */
+  setAdhesionStrength(multiplier: number): void {
+    this.params.adhesionCoefficient = this.baseAdhesionCoefficient * multiplier;
+  }
+
+  /**
+   * Scales wall-friction strength — a separate effect from adhesion, see
+   * SphParams.wallFrictionCoefficient — as a multiplier on the scenario's
+   * own damping rate (1 = as calibrated, 0 = off). Takes effect on the
+   * next step.
+   */
+  setWallFrictionStrength(multiplier: number): void {
+    this.params.wallFrictionCoefficient = this.baseWallFrictionCoefficient * multiplier;
   }
 
   /** Advances the simulation to cover `deltaSeconds` of wall-clock time. */

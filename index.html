@@ -316,15 +316,27 @@
           </div>
           <div class="row">
             <label for="particle-size">Particle Size</label>
-            <input id="particle-size" type="number" step="0.1" min="0.1" max="5" value="0.5" />
+            <input id="particle-size" type="number" step="0.1" min="0.1" max="5" value="1" />
+          </div>
+          <div class="row" title="Dynamic viscosity: how much the fluid resists internal flow. 0 = watery, higher = thicker/more honey-like">
+            <label for="viscosity">Viscosity</label>
+            <input id="viscosity" type="number" step="0.1" min="0" max="5" value="0.6" />
           </div>
           <div class="row" title="Remove particles that fall past the floor instead of bouncing them back in">
             <label for="floor-drain">Dispose</label>
-            <input id="floor-drain" type="checkbox" />
+            <input id="floor-drain" type="checkbox" checked />
           </div>
           <div class="row" title="Pairwise cohesion force that pulls loosely-connected water back together">
             <label for="surface-tension">Surface Tension</label>
             <input id="surface-tension" type="checkbox" checked />
+          </div>
+          <div class="row" title="Strength of the pull toward nearby surfaces, letting water cling to and run along a wall instead of separating from it. 0 = off, 1 = calibrated default">
+            <label for="wetting-strength">Wetting</label>
+            <input id="wetting-strength" type="number" step="0.1" min="0" max="3" value="0.1" />
+          </div>
+          <div class="row" title="Damps water's sliding speed along a surface it's touching/clinging to. 0 = frictionless, 1 = calibrated default">
+            <label for="wall-friction-strength">Wall Friction</label>
+            <input id="wall-friction-strength" type="number" step="0.1" min="0" max="3" value="1" />
           </div>
         </section>
 

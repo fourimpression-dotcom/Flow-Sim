@@ -48,6 +48,31 @@ export interface SphParams {
    */
   surfaceTensionCoefficient: number;
   /**
+   * Wetting/adhesion coefficient, >= 0 — separate from, and not to be
+   * confused with, surfaceTensionCoefficient above. Surface tension
+   * (cohesion) is a fluid-*fluid* force between nearby particles; adhesion
+   * is a fluid-*solid* force pulling particles near the collision mesh
+   * toward its surface (see core/kernels.ts's adhesionKernel and
+   * CpuSphBackend.computeAdhesionForce), which is what lets water cling to
+   * and run along a wall instead of just bouncing/falling straight off it.
+   * The two are computed by entirely separate functions; 0 disables
+   * adhesion without affecting cohesion at all.
+   */
+  adhesionCoefficient: number;
+  /**
+   * Wall-friction damping rate (1/s), >= 0 — a third force/effect, separate
+   * from both surfaceTensionCoefficient and adhesionCoefficient. Adhesion
+   * pulls particles near the collision mesh toward its surface (normal
+   * direction); this damps their velocity *along* the surface (tangential
+   * direction), since nothing else does — mesh collision only ever reflects
+   * the normal component, leaving tangential motion untouched, which reads
+   * as water sliding frictionlessly once adhesion holds it near a wall. See
+   * CpuSphBackend.applyWallFriction for the (unconditionally stable —
+   * cannot overshoot or reverse the tangential velocity, however large this
+   * is) damping formula. 0 disables it.
+   */
+  wallFrictionCoefficient: number;
+  /**
    * XSPH velocity-smoothing coefficient (Monaghan 1992), in [0, 1]. Blends
    * each particle's advection velocity toward its local density-weighted
    * neighborhood average before using it to move the particle, without
@@ -103,13 +128,23 @@ export interface SphDiagnostics {
  * The pipeline a step() call must perform, in order, is fixed by this contract:
  *   1. neighbor search (rebuild spatial structure for current positions)
  *   2. density + pressure (Tait EOS)
- *   3. force accumulation (pressure force + viscosity force + surface-tension cohesion force)
- *   4. velocity integration (semi-implicit Euler; forces/gravity, then clamped to SphParams.maxSpeed)
- *   5. XSPH velocity smoothing (produces a separate advection velocity —
+ *   3. fluid force accumulation (pressure force + viscosity force +
+ *      surface-tension cohesion force — a fluid-*fluid* pairwise force,
+ *      see SphParams.surfaceTensionCoefficient)
+ *   4. mesh adhesion force accumulation (fluid-*solid*, if a collision mesh
+ *      is set — see SphParams.adhesionCoefficient; kept as its own stage,
+ *      not folded into 3, since it's a different force between different
+ *      kinds of things — see CpuSphBackend.computeAdhesionForce)
+ *   5. velocity integration (semi-implicit Euler; forces/gravity, then clamped to SphParams.maxSpeed)
+ *   6. wall friction (damps tangential velocity near the collision mesh —
+ *      see SphParams.wallFrictionCoefficient; a velocity correction, not a
+ *      force, kept separate from stage 4's adhesion since it damps a
+ *      different velocity component for a different physical reason)
+ *   7. XSPH velocity smoothing (produces a separate advection velocity —
  *      see SphParams.xsphEpsilon — without altering the integrated one)
- *   6. position integration (advected using the XSPH-smoothed velocity)
- *   7. mesh obstacle collision (signed-distance-field boundary, if set)
- *   8. domain AABB boundary handling
+ *   8. position integration (advected using the XSPH-smoothed velocity)
+ *   9. mesh obstacle collision (signed-distance-field boundary, if set)
+ *   10. domain AABB boundary handling
  * A GPU backend must reproduce this same stage sequence and the same
  * per-stage math (see core/kernels.ts, core/collision.ts) — that is what
  * "shared physics model" means here, since GPU compute code cannot

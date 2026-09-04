@@ -1,5 +1,6 @@
 import type { CollisionField, SphComputeBackend, SphDiagnostics, SphParams, Vec3Tuple } from "../../core/types";
 import {
+  adhesionKernel,
   cohesionKernel,
   cohesionKernelCoefficient,
   poly6,
@@ -17,12 +18,12 @@ import { SpatialGrid } from "./spatialGrid";
 /**
  * Reference CPU implementation of SphComputeBackend: a plain per-particle
  * loop over typed arrays, run on the main thread. Implements the fixed
- * 8-stage pipeline (neighbor search -> density/pressure -> forces ->
- * velocity integration -> XSPH smoothing -> position integration -> mesh
- * collision -> domain boundary) declared by the SphComputeBackend contract,
- * using the shared kernel/collision formulas from core/kernels.ts and
- * core/collision.ts verbatim — this is the pairing a future GPU backend
- * must reproduce.
+ * 10-stage pipeline (neighbor search -> density/pressure -> fluid forces ->
+ * mesh adhesion force -> velocity integration -> wall friction -> XSPH
+ * smoothing -> position integration -> mesh collision -> domain boundary)
+ * declared by the SphComputeBackend contract, using the shared
+ * kernel/collision formulas from core/kernels.ts and core/collision.ts
+ * verbatim — this is the pairing a future GPU backend must reproduce.
  */
 export class CpuSphBackend implements SphComputeBackend {
   private count = 0;
@@ -66,7 +67,9 @@ export class CpuSphBackend implements SphComputeBackend {
     this.grid.build(this.positions, this.count);
     this.computeDensityPressure(params);
     this.computeForces(params);
+    this.computeAdhesionForce(params);
     this.integrateVelocity(params);
+    this.applyWallFriction(params);
     this.computeXsphCorrection(params);
     this.integratePosition(params);
     this.enforceMeshCollision(params);
@@ -218,6 +221,56 @@ export class CpuSphBackend implements SphComputeBackend {
     }
   }
 
+  /**
+   * Adhesion/wetting force: pulls particles near the collision mesh toward
+   * its surface, letting water cling to and run along a wall instead of
+   * separating from it as soon as nothing is physically pushing it there
+   * (mesh collision otherwise only ever pushes particles *out*, never in).
+   *
+   * This is a fluid-*solid* force, entirely separate from the fluid-*fluid*
+   * surface-tension cohesion force in computeForces above — different
+   * method, different kernel (adhesionKernel, not cohesionKernel), different
+   * coefficient (SphParams.adhesionCoefficient, not
+   * .surfaceTensionCoefficient), and it adds onto whatever computeForces
+   * already produced rather than being folded into that loop, so the two
+   * stay independently readable, tunable, and toggleable.
+   *
+   * Akinci et al. 2013 define adhesion the same way as cohesion: a pairwise
+   * force against sampled boundary particles. This simulation's boundary is
+   * a signed distance field, not a particle set, so there's no boundary
+   * particle to pair against — adhesionKernel is a distance-based
+   * approximation built for that instead (see its own doc comment). The
+   * band it's evaluated over starts at the collision margin (where
+   * enforceMeshCollision's push-out takes over) and extends one
+   * smoothingRadius beyond, so this force and that push-out never act on
+   * the same particle at the same time.
+   */
+  private computeAdhesionForce(params: SphParams): void {
+    const field = this.collisionField;
+    if (!field || params.adhesionCoefficient <= 0) return;
+
+    const margin = params.smoothingRadius * 0.5;
+    const outer = margin + params.smoothingRadius;
+
+    for (let i = 0; i < this.count; i++) {
+      const px = this.positions[i * 3]!;
+      const py = this.positions[i * 3 + 1]!;
+      const pz = this.positions[i * 3 + 2]!;
+
+      const distance = sampleSignedDistance(field, px, py, pz);
+      const pull = adhesionKernel(distance, margin, outer);
+      if (pull <= 0) continue;
+
+      const [nx, ny, nz] = sampleGradient(field, px, py, pz);
+      const magnitude = params.adhesionCoefficient * params.particleMass * pull;
+
+      // Pulls toward the surface: nx/ny/nz point outward, so subtract.
+      this.forces[i * 3] = this.forces[i * 3]! - magnitude * nx;
+      this.forces[i * 3 + 1] = this.forces[i * 3 + 1]! - magnitude * ny;
+      this.forces[i * 3 + 2] = this.forces[i * 3 + 2]! - magnitude * nz;
+    }
+  }
+
   private integrateVelocity(params: SphParams): void {
     const dt = params.timeStep;
     const [gx, gy, gz] = params.gravity;
@@ -247,6 +300,60 @@ export class CpuSphBackend implements SphComputeBackend {
       this.velocities[i * 3] = vx;
       this.velocities[i * 3 + 1] = vy;
       this.velocities[i * 3 + 2] = vz;
+    }
+  }
+
+  /**
+   * Wall friction: damps the velocity component *tangential* to the
+   * collision mesh for particles near it, over the same band as
+   * computeAdhesionForce (reusing adhesionKernel purely as a generic
+   * distance-based proximity weight, not because friction and adhesion are
+   * the same effect — they stay entirely separate mechanisms, with
+   * separate coefficients). Without this, mesh collision only ever
+   * reflects the *normal* velocity component, leaving tangential motion
+   * completely unaffected — which, once adhesion is holding water near a
+   * wall, reads as it sliding down frictionlessly.
+   *
+   * This is a velocity correction (like XSPH), not a force: the damping
+   * factor 1/(1 + k*weight*dt) is the same form as one step of implicit
+   * (backward-Euler) exponential decay, which is unconditionally stable —
+   * unlike an explicit drag *force* of the same strength, it can never
+   * overshoot and reverse the tangential velocity no matter how large
+   * wallFrictionCoefficient is, so there's no stability ceiling to
+   * calibrate against here the way there was for cohesion/adhesion.
+   */
+  private applyWallFriction(params: SphParams): void {
+    const field = this.collisionField;
+    if (!field || params.wallFrictionCoefficient <= 0) return;
+
+    const margin = params.smoothingRadius * 0.5;
+    const outer = margin + params.smoothingRadius;
+    const dt = params.timeStep;
+
+    for (let i = 0; i < this.count; i++) {
+      const px = this.positions[i * 3]!;
+      const py = this.positions[i * 3 + 1]!;
+      const pz = this.positions[i * 3 + 2]!;
+
+      const distance = sampleSignedDistance(field, px, py, pz);
+      const weight = adhesionKernel(distance, margin, outer);
+      if (weight <= 0) continue;
+
+      const [nx, ny, nz] = sampleGradient(field, px, py, pz);
+      const vx = this.velocities[i * 3]!;
+      const vy = this.velocities[i * 3 + 1]!;
+      const vz = this.velocities[i * 3 + 2]!;
+
+      const vn = vx * nx + vy * ny + vz * nz;
+      const tx = vx - vn * nx;
+      const ty = vy - vn * ny;
+      const tz = vz - vn * nz;
+
+      const damping = 1 / (1 + params.wallFrictionCoefficient * weight * dt);
+
+      this.velocities[i * 3] = vn * nx + tx * damping;
+      this.velocities[i * 3 + 1] = vn * ny + ty * damping;
+      this.velocities[i * 3 + 2] = vn * nz + tz * damping;
     }
   }
 

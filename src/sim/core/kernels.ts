@@ -78,6 +78,28 @@ export function cohesionKernel(r: number, h: number, coefficient: number): numbe
 }
 
 /**
+ * Boundary-adhesion (wetting) kernel — distinct from cohesion above.
+ * Cohesion is a fluid-fluid pairwise force (kernel of particle-pair
+ * distance r, evaluated in the fluid neighbor search); adhesion is a
+ * fluid-*solid* force, evaluated once per particle from its signed
+ * distance to the collision mesh, not from any particle pair. Akinci et
+ * al. 2013 define adhesion the same way as cohesion — as a pairwise force
+ * against sampled boundary particles — but this simulation's boundary is a
+ * signed distance field, not a particle set, so there is no boundary
+ * particle to pair against; this kernel is a distance-based approximation
+ * built for that: zero at both ends of [distMin, distMax] (the collision
+ * margin and the outer edge of the adhesion band) with zero slope at both
+ * ends too (an unclamped bump would start/stop the pull abruptly as a
+ * particle crosses into or out of the band), peaking in between.
+ */
+export function adhesionKernel(dist: number, distMin: number, distMax: number): number {
+  if (dist <= distMin || dist >= distMax) return 0;
+  const t = (dist - distMin) / (distMax - distMin);
+  const bump = t * (1 - t);
+  return 16 * bump * bump; // normalized so the peak (t=0.5) is 1
+}
+
+/**
  * Tait equation of state: relates density back to pressure for weakly-
  * compressible SPH. Negative pressure is clamped to 0 — the standard
  * free-surface-flow trick that avoids unphysical inter-particle attraction
