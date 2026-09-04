@@ -222,6 +222,7 @@ export class CpuSphBackend implements SphComputeBackend {
     const dt = params.timeStep;
     const [gx, gy, gz] = params.gravity;
     const minDensity = 1e-6;
+    const maxSpeedSq = params.maxSpeed * params.maxSpeed;
 
     for (let i = 0; i < this.count; i++) {
       const density = Math.max(this.densities[i]!, minDensity);
@@ -230,9 +231,22 @@ export class CpuSphBackend implements SphComputeBackend {
       const ay = this.forces[i * 3 + 1]! / density + gy;
       const az = this.forces[i * 3 + 2]! / density + gz;
 
-      this.velocities[i * 3] = this.velocities[i * 3]! + ax * dt;
-      this.velocities[i * 3 + 1] = this.velocities[i * 3 + 1]! + ay * dt;
-      this.velocities[i * 3 + 2] = this.velocities[i * 3 + 2]! + az * dt;
+      let vx = this.velocities[i * 3]! + ax * dt;
+      let vy = this.velocities[i * 3 + 1]! + ay * dt;
+      let vz = this.velocities[i * 3 + 2]! + az * dt;
+
+      // Safety valve, not normal behavior: see SphParams.maxSpeed.
+      const speedSq = vx * vx + vy * vy + vz * vz;
+      if (speedSq > maxSpeedSq) {
+        const scale = params.maxSpeed / Math.sqrt(speedSq);
+        vx *= scale;
+        vy *= scale;
+        vz *= scale;
+      }
+
+      this.velocities[i * 3] = vx;
+      this.velocities[i * 3 + 1] = vy;
+      this.velocities[i * 3 + 2] = vz;
     }
   }
 

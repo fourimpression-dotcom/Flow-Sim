@@ -56,6 +56,17 @@ export interface SphParams {
    * other; 0 disables it entirely (plain WCSPH advection).
    */
   xsphEpsilon: number;
+  /**
+   * Safety cap on particle speed (m/s), applied right after force
+   * integration. WCSPH's Tait pressure term is extremely stiff (~density^7)
+   * — a particle briefly over-compressed (e.g. squeezed into a tight
+   * corner) can get a single-step velocity kick far beyond anything the
+   * flow's own scale would produce, popping it out on its own regardless of
+   * gravity/flow direction. This doesn't fix the underlying compression
+   * event, just prevents it from launching a particle unboundedly; it's set
+   * generously (see scenario.ts) so normal splash dynamics never touch it.
+   */
+  maxSpeed: number;
   /** Gravity acceleration vector (m/s^2), e.g. [0, -9.81, 0]. */
   gravity: Vec3Tuple;
   /** Fixed physics timestep (s). Chosen from a CFL-style bound on smoothingRadius/soundSpeed. */
@@ -93,7 +104,7 @@ export interface SphDiagnostics {
  *   1. neighbor search (rebuild spatial structure for current positions)
  *   2. density + pressure (Tait EOS)
  *   3. force accumulation (pressure force + viscosity force + surface-tension cohesion force)
- *   4. velocity integration (semi-implicit Euler; forces/gravity only)
+ *   4. velocity integration (semi-implicit Euler; forces/gravity, then clamped to SphParams.maxSpeed)
  *   5. XSPH velocity smoothing (produces a separate advection velocity —
  *      see SphParams.xsphEpsilon — without altering the integrated one)
  *   6. position integration (advected using the XSPH-smoothed velocity)

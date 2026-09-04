@@ -143,6 +143,12 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
   const soundSpeed = Math.max(10, 10 * expectedMaxSpeed);
   const gamma = 7;
   const stiffness = (restDensity * soundSpeed * soundSpeed) / gamma;
+  // Generous multiple of the flow's own expected speed — a per-particle
+  // pressure-spike ejection (see SphParams.maxSpeed) can reach several
+  // times the flow's normal scale, but normal splash dynamics measured in
+  // testing never got close to even 2x, so this only ever engages for a
+  // genuine outlier.
+  const maxSpeed = expectedMaxSpeed * 5;
 
   // CFL-style bound: dt <~ 0.4 * h / soundSpeed. Kept as a fixed physics
   // timestep; SphSimulation substeps to keep pace with real time.
@@ -159,6 +165,7 @@ export function createDamBreakScenario(options: CreateDamBreakScenarioOptions = 
     // over-damping the flow (Monaghan's original paper allows up to ~0.5;
     // real-time SPH tends to use less).
     xsphEpsilon: 0.1,
+    maxSpeed,
     surfaceTensionCoefficient,
     gravity: [0, -9.81, 0],
     timeStep,
